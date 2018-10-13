@@ -1,9 +1,9 @@
 unit dbaddimdb;
-
+ 
 interface
-
+ 
 uses Classes, IniFiles, irc, kb, Contnrs, SyncObjs;
-
+ 
 type
   TDbImdb = class
     rls: AnsiString;
@@ -11,7 +11,7 @@ type
     constructor Create(rls, imdb_id: AnsiString);
     destructor Destroy; override;
   end;
-
+ 
   TDbImdbData = class
     imdb_id: AnsiString;
     imdb_year: Integer;
@@ -27,57 +27,61 @@ type
     imdb_festival:boolean;
     imdb_stvm:boolean;
     imdb_stvs:AnsiString;
+    // some more Informtations in DB
+    imdb_ogtitle:AnsiString;
+    bom_rls:AnsiString;
+    bom_year:Integer;
     constructor Create(imdb_id :AnsiString);
     destructor Destroy; override;
     procedure PostResults(rls : AnsiString = '');overload;
     procedure PostResults(const netname, channel: AnsiString; rls : AnsiString = '');overload;
   end;
-
+ 
 function dbaddimdb_Process(net, chan, nick, msg: AnsiString): Boolean;
 procedure dbaddimdb_SaveImdb(rls, imdb_id: AnsiString);
 procedure dbaddimdb_SaveImdbData(rls: AnsiString; imdbdata: TDbImdbData);
 procedure dbaddimdb_addimdb(params: AnsiString);
 procedure dbaddimdb_ParseImdb(rls, imdb_id: AnsiString);
 procedure dbaddimdb_FireKbAdd(rls : AnsiString);
-
+ 
 function dbaddimdb_Status: AnsiString;
 function dbaddimdb_checkid(const imdbid: AnsiString): Boolean;
 function dbaddimdb_parseid(const text: AnsiString; out imdbid: AnsiString): Boolean;
-
+ 
 procedure dbaddimdbInit;
 procedure dbaddimdbStart;
 procedure dbaddimdbUnInit;
-
+ 
 var
   last_addimdb: THashedStringList;
   last_imdbdata: THashedStringList;
   dbaddimdb_cs: TCriticalSection;
-
+ 
 implementation
-
+ 
 uses DateUtils, SysUtils, Math, configunit, mystrings, irccommandsunit, console, FLRE,
   sitesunit, queueunit, slmasks, slhttp, regexpr, debugunit, taskhttpimdb, pazo, mrdohutils;
-
+ 
 const
   section = 'dbaddimdb';
-
+ 
 var
   rx_imdbid: TFLRE;
   rx_captures: TFLREMultiCaptures;
   addimdbcmd: AnsiString;
-
+ 
 { TDbImdb }
 constructor TDbImdb.Create(rls, imdb_id: AnsiString);
 begin
   self.rls := rls;
   self.imdb_id := imdb_id;
 end;
-
+ 
 destructor TDbImdb.Destroy;
 begin
   inherited;
 end;
-
+ 
 { TDbImdbData }
 constructor TDbImdbData.Create(imdb_id:AnsiString);
 begin
@@ -86,7 +90,7 @@ begin
   imdb_countries:= TStringList.Create;
   imdb_genres:= TStringList.Create;
 end;
-
+ 
 destructor TDbImdbData.Destroy;
 begin
   imdb_languages.Free;
@@ -94,23 +98,24 @@ begin
   imdb_genres.Free;
   inherited;
 end;
-
+ 
 procedure TDbImdbData.PostResults(rls : AnsiString = '');
 var status:AnsiString;
 begin
-
+ 
   if imdb_stvm then status := 'STV'
   else if imdb_festival then status := 'Festival'
   else if imdb_ldt then status := 'Limited'
   else if imdb_wide then status := 'Wide'
   else status :=' Cine';
-
+ 
   irc_Addstats(Format('(<c9>i</c>).....<c2><b>IMDB</b></c>........ <c0><b>for : %s</b></c> .......: http://www.imdb.com/title/%s/   (%d)',[rls, imdb_id, imdb_year]));
+  irc_Addstats(Format('(<c9>i</c>).....<c2><b>IMDB</b></c>........ <c0><b>Original Title : %s</b></c> .......: http://www.boxofficemojo.com/movies/?id=%s (%d)',[imdb_ogtitle,bom_rls, bom_year]));
   irc_Addstats(Format('(<c9>i</c>).....<c2><b>IMDB</b></c>........ <b><c9>Country - Languages</b></c> ..: %s - %s',[imdb_countries.DelimitedText,imdb_languages.DelimitedText]));
   irc_Addstats(Format('(<c9>i</c>).....<c2><b>IMDB</b></c>........ <b><c5>Genres</b></c> .........: %s', [imdb_genres.DelimitedText]));
   irc_Addstats(Format('(<c9>i</c>).....<c2><b>IMDB</b></c>........ <c7><b>Rating</b>/<b>Type</b></c> ....: <b>%d</b> of 100 (%d) @ %d Screens (%s)',[imdb_rating,imdb_votes,imdb_screens,status]));
 end;
-
+ 
 procedure TDbImdbData.PostResults(const netname, channel: AnsiString; rls : AnsiString = '');
 var status:AnsiString;
 begin
@@ -119,15 +124,16 @@ begin
   else if imdb_ldt then status := 'Limited'
   else if imdb_wide then status := 'Wide'
   else status :=' Cine';
-
+ 
   irc_AddText(netname, channel, Format('(<c9>i</c>).....<c2><b>IMDB</b></c>........ <c0><b>for : %s</b></c> .......: http://www.imdb.com/title/%s/   (%d)',[rls, imdb_id, imdb_year]));
+  irc_AddText(netname, channel, Format('(<c9>i</c>).....<c2><b>IMDB</b></c>........ <c0><b>Original Title : %s</b></c> .......: http://www.boxofficemojo.com/movies/?id=%s (%d)',[imdb_ogtitle,bom_rls, bom_year]));
   irc_AddText(netname, channel, Format('(<c9>i</c>).....<c2><b>IMDB</b></c>........ <b><c9>Country - Languages</b></c> ..: %s - %s',[imdb_countries.DelimitedText,imdb_languages.DelimitedText]));
   irc_AddText(netname, channel, Format('(<c9>i</c>).....<c2><b>IMDB</b></c>........ <b><c5>Genres</b></c> .........: %s', [imdb_genres.DelimitedText]));
   irc_AddText(netname, channel, Format('(<c9>i</c>).....<c2><b>IMDB</b></c>........ <c7><b>Rating</b>/<b>Type</b></c> ....: <b>%d</b> of 100 (%d) @ %d Screens (%s)',[imdb_rating,imdb_votes,imdb_screens,status]));
 end;
-
+ 
 { Proc/Func }
-
+ 
 function dbaddimdb_Process(net, chan, nick, msg: AnsiString): Boolean;
 begin
   Result := False;
@@ -138,7 +144,7 @@ begin
     Result := True;
   end;
 end;
-
+ 
 procedure dbaddimdb_addimdb(params: AnsiString);
 var
   rls: AnsiString;
@@ -149,13 +155,13 @@ begin
   rls := SubString(params, ' ', 1);
   imdb_id := '';
   imdb_id := SubString(params, ' ', 2);
-
+ 
   if not dbaddimdb_checkid(imdb_id) then
   begin
     Debug(dpSpam, section, '[ADDIMDB] Invalid IMDB ID for %s: %s', [rls, imdb_id]);
     exit;
   end;
-
+ 
   if ((rls <> '') and (imdb_id <> '')) then
   begin
     dbaddimdb_cs.Enter;
@@ -164,12 +170,12 @@ begin
     finally
       dbaddimdb_cs.Leave;
     end;
-
+ 
     if i <> -1 then
     begin
       exit;
     end;
-
+ 
     try
       dbaddimdb_SaveImdb(rls, imdb_id);
     except
@@ -181,7 +187,7 @@ begin
     end;
   end;
 end;
-
+ 
 procedure dbaddimdb_SaveImdb(rls, imdb_id: AnsiString);
 var
   i: Integer;
@@ -196,7 +202,7 @@ begin
   if i = -1 then
   begin
     db_imdb := TDbImdb.Create(rls, imdb_id);
-
+ 
     dbaddimdb_cs.Enter;
     try
       try
@@ -211,10 +217,10 @@ begin
     finally
       dbaddimdb_cs.Leave;
     end;
-
+ 
     irc_AddInfo(Format('<c7>[iMDB]</c> for <b>%s</b> : %s', [rls, imdb_id]));
     irc_Addtext_by_key('addimdb', '!addimdb '+rls+' '+imdb_id);
-
+ 
     try
       dbaddimdb_ParseImdb(rls, imdb_id);
     except
@@ -224,7 +230,7 @@ begin
         exit;
       end;
     end;
-
+ 
     dbaddimdb_cs.Enter;
     try
       i:= last_addimdb.Count;
@@ -246,7 +252,7 @@ begin
     end;
   end;
 end;
-
+ 
 procedure dbaddimdb_SaveImdbData(rls: AnsiString; imdbdata: TDbImdbData);
 var
   i: Integer;
@@ -257,7 +263,7 @@ begin
   finally
     dbaddimdb_cs.Leave;
   end;
-
+ 
   if i = -1 then
   begin
     dbaddimdb_cs.Enter;
@@ -274,13 +280,13 @@ begin
     finally
       dbaddimdb_cs.Leave;
     end;
-
+ 
     if config.ReadBool(section, 'post_lookup_infos', false) then
     begin
       irc_AddInfo(Format('<c7>[iMDB Data]</c> for <b>%s</b> : %s', [rls, imdbdata.imdb_id]));
       imdbdata.PostResults(rls);
     end;
-
+ 
     try
       dbaddimdb_FireKbAdd(rls);
     except
@@ -290,7 +296,7 @@ begin
         exit;
       end;
     end;
-
+ 
     dbaddimdb_cs.Enter;
     try
       i:= last_imdbdata.Count;
@@ -312,7 +318,7 @@ begin
     end;
   end;
 end;
-
+ 
 procedure dbaddimdb_ParseImdb(rls, imdb_id: AnsiString);
 begin
   try
@@ -325,7 +331,7 @@ begin
     end;
   end;
 end;
-
+ 
 procedure dbaddimdb_FireKbAdd(rls : AnsiString);
 var p : TPazo;
     ps: TPazoSite;
@@ -340,7 +346,7 @@ begin
         ps := FindMostCompleteSite(p);
         if ((ps = nil) and (p.sites.Count > 0)) then
           ps:= TPazoSite(p.sites[0]);
-
+ 
         if (ps <> nil) then
         begin
           if spamcfg.ReadBool('addinfo','imdbupdate',True) then
@@ -356,7 +362,7 @@ begin
     end;
   end;
 end;
-
+ 
 { Checkid }
 function dbaddimdb_checkid(const imdbid: AnsiString): Boolean;
 begin
@@ -377,7 +383,7 @@ begin
     dbaddimdb_cs.Leave;
   end;
 end;
-
+ 
 { Parseid }
 function dbaddimdb_parseid(const text: AnsiString; out imdbid: AnsiString): Boolean;
 begin
@@ -403,16 +409,16 @@ begin
     dbaddimdb_cs.Leave;
   end;
 end;
-
-
+ 
+ 
 { Status }
 function dbaddimdb_Status: AnsiString;
 begin
   Result := Format('<b>iMDB</b>: %d, <b>iMDB data</b>: %d',[last_addimdb.Count, last_imdbdata.Count]);
 end;
-
+ 
 { Init }
-
+ 
 procedure dbaddimdbInit;
 begin
   dbaddimdb_cs := TCriticalSection.Create;
@@ -422,12 +428,12 @@ begin
   last_imdbdata.CaseSensitive:= False;
   rx_imdbid := TFLRE.Create('tt(\d{6,7})', [rfIGNORECASE]);
 end;
-
+ 
 procedure dbaddimdbStart;
 begin
   addimdbcmd := config.ReadString(section, 'addimdbcmd', '!addimdb');
 end;
-
+ 
 procedure dbaddimdbUninit;
 begin
   dbaddimdb_cs.Enter;
@@ -440,7 +446,5 @@ begin
   end;
   dbaddimdb_cs.Free;
 end;
-
+ 
 end.
-
-
